@@ -8,6 +8,7 @@
 !franz_2.pdf
 !fraction-highlight.pdf
 !german-umlaut-r.pdf
+!issue13269.pdf
 !xref_command_missing.pdf
 !issue1155r.pdf
 !issue2017r.pdf
@@ -42,6 +43,7 @@
 !issue7406.pdf
 !issue7426.pdf
 !issue7439.pdf
+!issue7847_radial.pdf
 !issue7446.pdf
 !issue7492.pdf
 !issue7544.pdf
@@ -65,6 +67,7 @@
 !issue8229.pdf
 !issue8276_reduced.pdf
 !issue8372.pdf
+!xfa_filled_imm1344e.pdf
 !issue8424.pdf
 !issue8480.pdf
 !bug1650302_reduced.pdf
@@ -101,6 +104,7 @@
 !issue11242_reduced.pdf
 !issue11279.pdf
 !issue11362.pdf
+!issue13325_reduced.pdf
 !issue11578_reduced.pdf
 !issue11651.pdf
 !issue11878.pdf
@@ -121,11 +125,13 @@
 !bug1068432.pdf
 !issue12295.pdf
 !bug1146106.pdf
+!issue13447.pdf
 !bug1245391_reduced.pdf
 !bug1252420.pdf
 !bug1513120_reduced.pdf
 !bug1538111.pdf
 !bug1552113.pdf
+!issue6132.pdf
 !issue9949.pdf
 !bug1308536.pdf
 !bug1337429.pdf
@@ -154,6 +160,7 @@
 !issue3879r.pdf
 !issue5686.pdf
 !issue3928.pdf
+!issue8565.pdf
 !clippath.pdf
 !issue8795_reduced.pdf
 !close-path-bug.pdf
@@ -181,6 +188,7 @@
 !images_1bit_grayscale.pdf
 !issue5280.pdf
 !issue12399_reduced.pdf
+!annotation-ink-without-appearance.pdf
 !issue5677.pdf
 !issue5954.pdf
 !issue6612.pdf
@@ -198,6 +206,7 @@
 !issue11403_reduced.pdf
 !issue2074.pdf
 !scan-bad.pdf
+!issue13561_reduced.pdf
 !bug847420.pdf
 !bug860632.pdf
 !bug894572.pdf
@@ -209,6 +218,7 @@
 !bug1473809.pdf
 !issue12120_reduced.pdf
 !pdfjsbad1586.pdf
+!standard_fonts.pdf
 !freeculture.pdf
 !issue6006.pdf
 !pdfkit_compressed.pdf
@@ -246,8 +256,10 @@
 !S2.pdf
 !glyph_accent.pdf
 !personwithdog.pdf
+!find_all.pdf
 !helloworld-bad.pdf
 !zerowidthline.pdf
+!issue13242.pdf
 !js-colors.pdf
 !annotation-line-without-appearance-empty-Rect.pdf
 !issue12841_reduced.pdf
@@ -294,6 +306,7 @@
 !bug1028735.pdf
 !bug1046314.pdf
 !bug1065245.pdf
+!issue6769.pdf
 !bug1151216.pdf
 !bug1175962.pdf
 !bug1020226.pdf
@@ -310,6 +323,7 @@
 !noembed-eucjp.pdf
 !noembed-sjis.pdf
 !vertical.pdf
+!issue13343.pdf
 !ZapfDingbats.pdf
 !bug878026.pdf
 !issue1045.pdf
@@ -363,6 +377,7 @@
 !issue5481.pdf
 !issue5567.pdf
 !issue5701.pdf
+!issue6769_no_matrix.pdf
 !issue12007_reduced.pdf
 !issue5896.pdf
 !issue6010_1.pdf
@@ -373,8 +388,10 @@
 !issue6106.pdf
 !issue6296.pdf
 !bug852992_reduced.pdf
+!issue13271.pdf
 !issue6298.pdf
 !issue6889.pdf
+!issue11473.pdf
 !bug1001080.pdf
 !bug1671312_reduced.pdf
 !bug1671312_ArialNarrow.pdf
@@ -391,6 +408,7 @@
 !issue13193.pdf
 !annotation-underline-without-appearance.pdf
 !issue269_2.pdf
+!issue13372.pdf
 !annotation-strikeout.pdf
 !annotation-strikeout-without-appearance.pdf
 !annotation-squiggly.pdf
@@ -400,6 +418,7 @@
 !issue12418_reduced.pdf
 !annotation-freetext.pdf
 !annotation-line.pdf
+!evaljs.pdf
 !annotation-line-without-appearance.pdf
 !bug1669099.pdf
 !annotation-square-circle.pdf
@@ -410,6 +429,7 @@
 !annotation-choice-widget.pdf
 !annotation-button-widget.pdf
 !annotation-polyline-polygon.pdf
+!annotation-polyline-polygon-without-appearance.pdf
 !zero_descent.pdf
 !operator-in-TJ-array.pdf
 !issue7878.pdf
@@ -421,6 +441,7 @@
 !quadpoints.pdf
 !transparent.pdf
 !xobject-image.pdf
+!issue6605.pdf
 !ccitt_EndOfBlock_false.pdf
 !issue9972-1.pdf
 !issue9972-2.pdf

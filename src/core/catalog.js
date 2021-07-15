@@ -14,23 +14,6 @@
  */
 
 import {
-  bytesToString,
-  createPromiseCapability,
-  createValidAbsoluteUrl,
-  DocumentActionEventType,
-  FormatError,
-  info,
-  isBool,
-  isNum,
-  isString,
-  objectSize,
-  PermissionFlag,
-  shadow,
-  stringToPDFString,
-  stringToUTF8String,
-  warn,
-} from "../shared/util.js";
-import {
   clearPrimitiveCaches,
   Dict,
   isDict,
@@ -46,6 +29,22 @@ import {
   MissingDataException,
   toRomanNumerals,
 } from "./core_utils.js";
+import {
+  createPromiseCapability,
+  createValidAbsoluteUrl,
+  DocumentActionEventType,
+  FormatError,
+  info,
+  isBool,
+  isNum,
+  isString,
+  objectSize,
+  PermissionFlag,
+  shadow,
+  stringToPDFString,
+  stringToUTF8String,
+  warn,
+} from "../shared/util.js";
 import { NameTree, NumberTree } from "./name_number_tree.js";
 import { ColorSpace } from "./colorspace.js";
 import { FileSpec } from "./file_spec.js";
@@ -54,7 +53,10 @@ import { MetadataParser } from "./metadata_parser.js";
 import { StructTreeRoot } from "./struct_tree.js";
 
 function fetchDestination(dest) {
-  return isDict(dest) ? dest.get("D") : dest;
+  if (dest instanceof Dict) {
+    dest = dest.get("D");
+  }
+  return Array.isArray(dest) ? dest : null;
 }
 
 class Catalog {
@@ -69,8 +71,10 @@ class Catalog {
 
     this.fontCache = new RefSetCache();
     this.builtInCMapCache = new Map();
+    this.standardFontDataCache = new Map();
     this.globalImageCache = new GlobalImageCache();
     this.pageKidsCountCache = new RefSetCache();
+    this.pageIndexCache = new RefSetCache();
     this.nonBlendModesSet = new RefSet();
   }
 
@@ -136,7 +140,7 @@ class Catalog {
         // charsets, let's just hope that the author of the PDF was reasonable
         // enough to stick with the XML default charset, which is UTF-8.
         try {
-          const data = stringToUTF8String(bytesToString(stream.getBytes()));
+          const data = stringToUTF8String(stream.getString());
           if (data) {
             metadata = new MetadataParser(data).serializable;
           }
@@ -514,24 +518,42 @@ class Catalog {
     const obj = this._readDests(),
       dests = Object.create(null);
     if (obj instanceof NameTree) {
-      const names = obj.getAll();
-      for (const name in names) {
-        dests[name] = fetchDestination(names[name]);
+      for (const [key, value] of obj.getAll()) {
+        const dest = fetchDestination(value);
+        if (dest) {
+          dests[key] = dest;
+        }
       }
     } else if (obj instanceof Dict) {
       obj.forEach(function (key, value) {
-        if (value) {
-          dests[key] = fetchDestination(value);
+        const dest = fetchDestination(value);
+        if (dest) {
+          dests[key] = dest;
         }
       });
     }
     return shadow(this, "destinations", dests);
   }
 
-  getDestination(destinationId) {
+  getDestination(id) {
     const obj = this._readDests();
-    if (obj instanceof NameTree || obj instanceof Dict) {
-      return fetchDestination(obj.get(destinationId) || null);
+    if (obj instanceof NameTree) {
+      const dest = fetchDestination(obj.get(id));
+      if (dest) {
+        return dest;
+      }
+      // Fallback to checking the *entire* NameTree, in an attempt to handle
+      // corrupt PDF documents with out-of-order NameTrees (fixes issue 10272).
+      const allDest = this.destinations[id];
+      if (allDest) {
+        warn(`Found "${id}" at an incorrect position in the NameTree.`);
+        return allDest;
+      }
+    } else if (obj instanceof Dict) {
+      const dest = fetchDestination(obj.get(id));
+      if (dest) {
+        return dest;
+      }
     }
     return null;
   }
@@ -582,8 +604,9 @@ class Catalog {
       currentIndex = 1;
 
     for (let i = 0, ii = this.numPages; i < ii; i++) {
-      if (i in nums) {
-        const labelDict = nums[i];
+      const labelDict = nums.get(i);
+
+      if (labelDict !== undefined) {
         if (!isDict(labelDict)) {
           throw new FormatError("PageLabel is not a dictionary.");
         }
@@ -879,34 +902,51 @@ class Catalog {
     const obj = this._catDict.get("Names");
     let attachments = null;
 
-    if (obj && obj.has("EmbeddedFiles")) {
+    if (obj instanceof Dict && obj.has("EmbeddedFiles")) {
       const nameTree = new NameTree(obj.getRaw("EmbeddedFiles"), this.xref);
-      const names = nameTree.getAll();
-      for (const name in names) {
-        const fs = new FileSpec(names[name], this.xref);
+      for (const [key, value] of nameTree.getAll()) {
+        const fs = new FileSpec(value, this.xref);
         if (!attachments) {
           attachments = Object.create(null);
         }
-        attachments[stringToPDFString(name)] = fs.serializable;
+        attachments[stringToPDFString(key)] = fs.serializable;
       }
     }
     return shadow(this, "attachments", attachments);
   }
 
+  get xfaImages() {
+    const obj = this._catDict.get("Names");
+    let xfaImages = null;
+
+    if (obj instanceof Dict && obj.has("XFAImages")) {
+      const nameTree = new NameTree(obj.getRaw("XFAImages"), this.xref);
+      for (const [key, value] of nameTree.getAll()) {
+        if (!xfaImages) {
+          xfaImages = new Dict(this.xref);
+        }
+        xfaImages.set(key, value);
+      }
+    }
+    return shadow(this, "xfaImages", xfaImages);
+  }
+
   _collectJavaScript() {
     const obj = this._catDict.get("Names");
-
     let javaScript = null;
+
     function appendIfJavaScriptDict(name, jsDict) {
-      const type = jsDict.get("S");
-      if (!isName(type, "JavaScript")) {
+      if (!(jsDict instanceof Dict)) {
+        return;
+      }
+      if (!isName(jsDict.get("S"), "JavaScript")) {
         return;
       }
 
       let js = jsDict.get("JS");
       if (isStream(js)) {
-        js = bytesToString(js.getBytes());
-      } else if (!isString(js)) {
+        js = js.getString();
+      } else if (typeof js !== "string") {
         return;
       }
 
@@ -916,22 +956,15 @@ class Catalog {
       javaScript.set(name, stringToPDFString(js));
     }
 
-    if (obj && obj.has("JavaScript")) {
+    if (obj instanceof Dict && obj.has("JavaScript")) {
       const nameTree = new NameTree(obj.getRaw("JavaScript"), this.xref);
-      const names = nameTree.getAll();
-      for (const name in names) {
-        // We don't use most JavaScript in PDF documents. This code is
-        // defensive so we don't cause errors on document load.
-        const jsDict = names[name];
-        if (isDict(jsDict)) {
-          appendIfJavaScriptDict(name, jsDict);
-        }
+      for (const [key, value] of nameTree.getAll()) {
+        appendIfJavaScriptDict(key, value);
       }
     }
-
-    // Append OpenAction "JavaScript" actions to the JavaScript array.
+    // Append OpenAction "JavaScript" actions, if any, to the JavaScript map.
     const openAction = this._catDict.get("OpenAction");
-    if (isDict(openAction) && isName(openAction.get("S"), "JavaScript")) {
+    if (openAction) {
       appendIfJavaScriptDict("OpenAction", openAction);
     }
 
@@ -990,6 +1023,7 @@ class Catalog {
     clearPrimitiveCaches();
     this.globalImageCache.clear(/* onlyData = */ manuallyTriggered);
     this.pageKidsCountCache.clear();
+    this.pageIndexCache.clear();
     this.nonBlendModesSet.clear();
 
     const promises = [];
@@ -1003,6 +1037,7 @@ class Catalog {
       }
       this.fontCache.clear();
       this.builtInCMapCache.clear();
+      this.standardFontDataCache.clear();
     });
   }
 
@@ -1119,6 +1154,11 @@ class Catalog {
   }
 
   getPageIndex(pageRef) {
+    const cachedPageIndex = this.pageIndexCache.get(pageRef);
+    if (cachedPageIndex !== undefined) {
+      return Promise.resolve(cachedPageIndex);
+    }
+
     // The page tree nodes have the count of all the leaves below them. To get
     // how many pages are before we just have to walk up the tree and keep
     // adding the count of siblings to the left of the node.
@@ -1198,16 +1238,16 @@ class Catalog {
     }
 
     let total = 0;
-    function next(ref) {
-      return pagesBeforeRef(ref).then(function (args) {
+    const next = ref =>
+      pagesBeforeRef(ref).then(args => {
         if (!args) {
+          this.pageIndexCache.put(pageRef, total);
           return total;
         }
         const [count, parentRef] = args;
         total += count;
         return next(parentRef);
       });
-    }
 
     return next(pageRef);
   }
@@ -1350,7 +1390,7 @@ class Catalog {
           let js;
 
           if (isStream(jsAction)) {
-            js = bytesToString(jsAction.getBytes());
+            js = jsAction.getString();
           } else if (isString(jsAction)) {
             js = jsAction;
           }

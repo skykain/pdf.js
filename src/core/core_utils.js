@@ -16,7 +16,6 @@
 import {
   assert,
   BaseException,
-  bytesToString,
   objectSize,
   stringToPDFString,
   warn,
@@ -146,7 +145,7 @@ function toRomanNumerals(number, lowerCase = false) {
   number %= 10;
   romanBuf.push(ROMAN_NUMBER_MAP[10 + pos]);
   // Ones
-  romanBuf.push(ROMAN_NUMBER_MAP[20 + number]);
+  romanBuf.push(ROMAN_NUMBER_MAP[20 + number]); // eslint-disable-line unicorn/no-array-push-push
 
   const romanStr = romanBuf.join("");
   return lowerCase ? romanStr.toLowerCase() : romanStr;
@@ -269,7 +268,7 @@ function _collectJS(entry, xref, list, parents) {
       const js = entry.get("JS");
       let code;
       if (isStream(js)) {
-        code = bytesToString(js.getBytes());
+        code = js.getString();
       } else {
         code = js;
       }

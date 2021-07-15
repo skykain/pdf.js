@@ -33,9 +33,6 @@ const THUMBNAIL_WIDTH = 98; // px
  * @property {IPDFLinkService} linkService - The navigation/linking service.
  * @property {PDFRenderingQueue} renderingQueue - The rendering queue object.
  * @property {function} checkSetImageDisabled
- * @property {boolean} [disableCanvasToImageConversion] - Don't convert the
- *   canvas thumbnails to images. This prevents `toDataURL` calls, but
- *   increases the overall memory usage. The default value is `false`.
  * @property {IL10n} l10n - Localization service.
  */
 
@@ -97,7 +94,6 @@ class PDFThumbnailView {
     linkService,
     renderingQueue,
     checkSetImageDisabled,
-    disableCanvasToImageConversion = false,
     l10n,
   }) {
     this.id = id;
@@ -121,7 +117,6 @@ class PDFThumbnailView {
       function () {
         return false;
       };
-    this.disableCanvasToImageConversion = disableCanvasToImageConversion;
 
     const pageWidth = this.viewport.width,
       pageHeight = this.viewport.height,
@@ -260,20 +255,6 @@ class PDFThumbnailView {
     }
     const reducedCanvas = this._reduceImage(canvas);
 
-    if (this.disableCanvasToImageConversion) {
-      reducedCanvas.className = "thumbnailImage";
-      this._thumbPageCanvas.then(msg => {
-        reducedCanvas.setAttribute("aria-label", msg);
-      });
-      reducedCanvas.style.width = this.canvasWidth + "px";
-      reducedCanvas.style.height = this.canvasHeight + "px";
-
-      this.canvas = reducedCanvas;
-
-      this.div.setAttribute("data-loaded", true);
-      this.ring.appendChild(reducedCanvas);
-      return;
-    }
     const image = document.createElement("img");
     image.className = "thumbnailImage";
     this._thumbPageCanvas.then(msg => {
@@ -332,9 +313,8 @@ class PDFThumbnailView {
     // the `draw` and `setImage` methods (fixes issue 8233).
     // NOTE: To primarily avoid increasing memory usage too much, but also to
     //   reduce downsizing overhead, we purposely limit the up-scaling factor.
-    const { ctx, canvas, transform } = this._getPageDrawContext(
-      DRAW_UPSCALE_FACTOR
-    );
+    const { ctx, canvas, transform } =
+      this._getPageDrawContext(DRAW_UPSCALE_FACTOR);
     const drawViewport = this.viewport.clone({
       scale: DRAW_UPSCALE_FACTOR * this.scale,
     });
@@ -501,11 +481,7 @@ class PDFThumbnailView {
     }
 
     this._thumbPageCanvas.then(msg => {
-      if (this.image) {
-        this.image.setAttribute("aria-label", msg);
-      } else if (this.canvas) {
-        this.canvas.setAttribute("aria-label", msg);
-      }
+      this.image?.setAttribute("aria-label", msg);
     });
   }
 }

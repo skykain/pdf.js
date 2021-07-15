@@ -29,10 +29,18 @@ import {
   stringToBytes,
   stringToUTF8String,
 } from "../../src/shared/util.js";
-import { CMAP_PARAMS, createIdFactory, XRefMock } from "./test_utils.js";
+import {
+  CMAP_PARAMS,
+  createIdFactory,
+  STANDARD_FONT_DATA_URL,
+  XRefMock,
+} from "./test_utils.js";
+import {
+  DefaultCMapReaderFactory,
+  DefaultStandardFontDataFactory,
+} from "../../src/display/api.js";
 import { Dict, Name, Ref, RefSetCache } from "../../src/core/primitives.js";
 import { Lexer, Parser } from "../../src/core/parser.js";
-import { DefaultCMapReaderFactory } from "../../src/display/api.js";
 import { PartialEvaluator } from "../../src/core/evaluator.js";
 import { StringStream } from "../../src/core/stream.js";
 import { WorkerTask } from "../../src/core/worker.js";
@@ -68,12 +76,22 @@ describe("annotation", function () {
     }
   }
 
+  const fontDataReader = new DefaultStandardFontDataFactory({
+    baseUrl: STANDARD_FONT_DATA_URL,
+  });
+
   function HandlerMock() {
     this.inputs = [];
   }
   HandlerMock.prototype = {
     send(name, data) {
       this.inputs.push({ name, data });
+    },
+    sendWithPromise(name, data) {
+      if (name !== "FetchStandardFontData") {
+        return Promise.reject(new Error(`Unsupported mock ${name}.`));
+      }
+      return fontDataReader.fetch(data);
     },
   };
 
@@ -107,6 +125,7 @@ describe("annotation", function () {
       idFactory: createIdFactory(/* pageIndex = */ 0),
       fontCache: new RefSetCache(),
       builtInCMapCache,
+      standardFontDataCache: new Map(),
     });
   });
 
@@ -230,24 +249,10 @@ describe("annotation", function () {
 
     it("should process quadpoints in the standard order", function () {
       rect = [10, 10, 20, 20];
-      dict.set("QuadPoints", [
-        10,
-        20,
-        20,
-        20,
-        10,
-        10,
-        20,
-        10,
-        11,
-        19,
-        19,
-        19,
-        11,
-        11,
-        19,
-        11,
-      ]);
+      dict.set(
+        "QuadPoints",
+        [10, 20, 20, 20, 10, 10, 20, 10, 11, 19, 19, 19, 11, 11, 19, 11]
+      );
       expect(getQuadPoints(dict, rect)).toEqual([
         [
           { x: 10, y: 20 },
@@ -1192,8 +1197,8 @@ describe("annotation", function () {
       expect(data.url).toBeUndefined();
       expect(data.unsafeUrl).toBeUndefined();
       expect(data.dest).toEqual([
-        { num: 17, gen: 0 },
-        { name: "XYZ" },
+        Ref.get(17, 0),
+        Name.get("XYZ"),
         0,
         841.89,
         null,
@@ -2295,8 +2300,7 @@ describe("annotation", function () {
         { ref: buttonWidgetRef, data: buttonWidgetDict },
       ]);
       const task = new WorkerTask("test print");
-      partialEvaluator.options = { ignoreErrors: true };
-
+      const checkboxEvaluator = partialEvaluator.clone({ ignoreErrors: true });
       const annotation = await AnnotationFactory.create(
         xref,
         buttonWidgetRef,
@@ -2307,7 +2311,7 @@ describe("annotation", function () {
       annotationStorage.set(annotation.data.id, { value: true });
 
       const operatorList = await annotation.getOperatorList(
-        partialEvaluator,
+        checkboxEvaluator,
         task,
         false,
         annotationStorage
@@ -2320,7 +2324,7 @@ describe("annotation", function () {
         OPS.showText,
         OPS.endAnnotation,
       ]);
-      expect(operatorList.argsArray[3][0][0].fontChar).toEqual("✔");
+      expect(operatorList.argsArray[3][0][0].unicode).toEqual("4");
     });
 
     it("should render checkboxes for printing", async function () {

@@ -354,9 +354,6 @@ const PDFViewerApplication = {
     if ("disablehistory" in hashParams) {
       AppOptions.set("disableHistory", hashParams.disablehistory === "true");
     }
-    if ("webgl" in hashParams) {
-      AppOptions.set("enableWebGL", hashParams.webgl === "true");
-    }
     if ("verbosity" in hashParams) {
       AppOptions.set("verbosity", hashParams.verbosity | 0);
     }
@@ -424,20 +421,23 @@ const PDFViewerApplication = {
     try {
       const styleSheet = document.styleSheets[0];
       const cssRules = styleSheet?.cssRules || [];
+      const mediaMatcher =
+        typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")
+          ? "-moz-toolbar-prefers-color-scheme"
+          : "prefers-color-scheme";
+      const mediaRule = `(${mediaMatcher}: dark)`;
+      const mediaRegex = new RegExp(
+        `^@media \\(${mediaMatcher}: dark\\) {\\n\\s*([\\w\\s-.,:;/\\\\{}()]+)\\n}$`
+      );
       for (let i = 0, ii = cssRules.length; i < ii; i++) {
         const rule = cssRules[i];
-        if (
-          rule instanceof CSSMediaRule &&
-          rule.media?.[0] === "(prefers-color-scheme: dark)"
-        ) {
+        if (rule instanceof CSSMediaRule && rule.media?.[0] === mediaRule) {
           if (cssTheme === ViewerCssTheme.LIGHT) {
             styleSheet.deleteRule(i);
             return;
           }
           // cssTheme === ViewerCssTheme.DARK
-          const darkRules = /^@media \(prefers-color-scheme: dark\) {\n\s*([\w\s-.,:;/\\{}()]+)\n}$/.exec(
-            rule.cssText
-          );
+          const darkRules = mediaRegex.exec(rule.cssText);
           if (darkRules?.[1]) {
             styleSheet.deleteRule(i);
             styleSheet.insertRule(darkRules[1], i);
@@ -508,7 +508,6 @@ const PDFViewerApplication = {
       findController,
       scriptingManager: pdfScriptingManager,
       renderer: AppOptions.get("renderer"),
-      enableWebGL: AppOptions.get("enableWebGL"),
       l10n: this.l10n,
       textLayerMode: AppOptions.get("textLayerMode"),
       imageResourcesPath: AppOptions.get("imageResourcesPath"),
@@ -829,6 +828,7 @@ const PDFViewerApplication = {
       this.pdfDocumentProperties.setDocument(null);
     }
     webViewerResetPermissions();
+    this.pdfLinkService.externalLinkEnabled = true;
     this._fellback = false;
     this.store = null;
     this.isInitialViewSet = false;
@@ -1220,7 +1220,7 @@ const PDFViewerApplication = {
     pdfThumbnailViewer.setDocument(pdfDocument);
 
     const storedPromise = (this.store = new ViewHistory(
-      pdfDocument.fingerprint
+      pdfDocument.fingerprints[0]
     ))
       .getMultiple({
         page: null,
@@ -1252,7 +1252,7 @@ const PDFViewerApplication = {
           const viewOnLoad = AppOptions.get("viewOnLoad");
 
           this._initializePdfHistory({
-            fingerprint: pdfDocument.fingerprint,
+            fingerprint: pdfDocument.fingerprints[0],
             viewOnLoad,
             initialDest: openAction?.dest,
           });
@@ -1498,12 +1498,8 @@ const PDFViewerApplication = {
    * @private
    */
   async _initializeMetadata(pdfDocument) {
-    const {
-      info,
-      metadata,
-      contentDispositionFilename,
-      contentLength,
-    } = await pdfDocument.getMetadata();
+    const { info, metadata, contentDispositionFilename, contentLength } =
+      await pdfDocument.getMetadata();
 
     if (pdfDocument !== this.pdfDocument) {
       return; // The document was closed while the metadata resolved.
@@ -1515,10 +1511,9 @@ const PDFViewerApplication = {
 
     // Provides some basic debug information
     console.log(
-      `PDF ${pdfDocument.fingerprint} [${info.PDFFormatVersion} ` +
+      `PDF ${pdfDocument.fingerprints[0]} [${info.PDFFormatVersion} ` +
         `${(info.Producer || "-").trim()} / ${(info.Creator || "-").trim()}] ` +
-        `(PDF.js: ${version || "-"}` +
-        `${this.pdfViewer.enableWebGL ? " [WebGL]" : ""})`
+        `(PDF.js: ${version || "-"})`
     );
 
     let pdfTitle = info?.Title;
@@ -1552,7 +1547,7 @@ const PDFViewerApplication = {
       // Note: `isPureXfa === true` implies that `enableXfa = true` was set.
       !pdfDocument.isPureXfa
     ) {
-      console.warn("Warning: XFA is not supported");
+      console.warn("Warning: XFA is not enabled");
       this.fallback(UNSUPPORTED_FEATURES.forms);
     } else if (
       (info.IsAcroFormPresent || info.IsXFAPresent) &&
@@ -1784,7 +1779,8 @@ const PDFViewerApplication = {
 
   forceRendering() {
     this.pdfRenderingQueue.printing = !!this.printService;
-    this.pdfRenderingQueue.isThumbnailViewEnabled = this.pdfSidebar.isThumbnailViewVisible;
+    this.pdfRenderingQueue.isThumbnailViewEnabled =
+      this.pdfSidebar.isThumbnailViewVisible;
     this.pdfRenderingQueue.renderHighestPriority();
   },
 
@@ -1820,8 +1816,8 @@ const PDFViewerApplication = {
     const pagesOverview = this.pdfViewer.getPagesOverview();
     const printContainer = this.appConfig.printContainer;
     const printResolution = AppOptions.get("printResolution");
-    const optionalContentConfigPromise = this.pdfViewer
-      .optionalContentConfigPromise;
+    const optionalContentConfigPromise =
+      this.pdfViewer.optionalContentConfigPromise;
 
     const printService = PDFPrintServiceFactory.instance.createPrintService(
       this.pdfDocument,
@@ -2424,7 +2420,8 @@ function webViewerUpdateViewarea(evt) {
     location.pdfOpenParams
   );
   PDFViewerApplication.appConfig.toolbar.viewBookmark.href = href;
-  PDFViewerApplication.appConfig.secondaryToolbar.viewBookmarkButton.href = href;
+  PDFViewerApplication.appConfig.secondaryToolbar.viewBookmarkButton.href =
+    href;
 
   // Show/hide the loading indicator in the page number input element.
   const currentPage = PDFViewerApplication.pdfViewer.getPageView(
@@ -2686,10 +2683,8 @@ function setZoomDisabledTimeout() {
 }
 
 function webViewerWheel(evt) {
-  const {
-    pdfViewer,
-    supportedMouseWheelZoomModifierKeys,
-  } = PDFViewerApplication;
+  const { pdfViewer, supportedMouseWheelZoomModifierKeys } =
+    PDFViewerApplication;
 
   if (pdfViewer.isInPresentationMode) {
     return;

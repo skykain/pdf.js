@@ -503,10 +503,25 @@ describe("api", function () {
       expect(pdfDocument.numPages).toEqual(3);
     });
 
-    it("gets fingerprint", function () {
-      expect(pdfDocument.fingerprint).toEqual(
-        "ea8b35919d6279a369e835bde778611b"
+    it("gets fingerprints", function () {
+      expect(pdfDocument.fingerprints).toEqual([
+        "ea8b35919d6279a369e835bde778611b",
+        null,
+      ]);
+    });
+
+    it("gets fingerprints, from modified document", async function () {
+      const loadingTask = getDocument(
+        buildGetDocumentParams("annotation-tx.pdf")
       );
+      const pdfDoc = await loadingTask.promise;
+
+      expect(pdfDoc.fingerprints).toEqual([
+        "3ebd77c320274649a68f10dbf3b9f882",
+        "e7087346aa4b4ae0911c1f1643b57345",
+      ]);
+
+      await loadingTask.destroy();
     });
 
     it("gets page", async function () {
@@ -665,6 +680,24 @@ describe("api", function () {
         "non-existent-named-destination"
       );
       expect(destination).toEqual(null);
+
+      await loadingTask.destroy();
+    });
+
+    it("gets a destination, from out-of-order /Names (NameTree) dictionary (issue 10272)", async function () {
+      if (isNodeJS) {
+        pending("Linked test-cases are not supported in Node.js.");
+      }
+      const loadingTask = getDocument(buildGetDocumentParams("issue10272.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const destination = await pdfDoc.getDestination("link_1");
+      expect(destination).toEqual([
+        { num: 17, gen: 0 },
+        { name: "XYZ" },
+        69,
+        125,
+        0,
+      ]);
 
       await loadingTask.destroy();
     });
@@ -1066,12 +1099,8 @@ describe("api", function () {
     });
 
     it("gets metadata", async function () {
-      const {
-        info,
-        metadata,
-        contentDispositionFilename,
-        contentLength,
-      } = await pdfDocument.getMetadata();
+      const { info, metadata, contentDispositionFilename, contentLength } =
+        await pdfDocument.getMetadata();
 
       expect(info.Title).toEqual("Basic API Test");
       // Custom, non-standard, information dictionary entries.
@@ -1096,12 +1125,8 @@ describe("api", function () {
         buildGetDocumentParams("tracemonkey.pdf")
       );
       const pdfDoc = await loadingTask.promise;
-      const {
-        info,
-        metadata,
-        contentDispositionFilename,
-        contentLength,
-      } = await pdfDoc.getMetadata();
+      const { info, metadata, contentDispositionFilename, contentLength } =
+        await pdfDoc.getMetadata();
 
       expect(info.Creator).toEqual("TeX");
       expect(info.Producer).toEqual("pdfeTeX-1.21a");
@@ -1132,12 +1157,8 @@ describe("api", function () {
     it("gets metadata, with missing PDF header (bug 1606566)", async function () {
       const loadingTask = getDocument(buildGetDocumentParams("bug1606566.pdf"));
       const pdfDoc = await loadingTask.promise;
-      const {
-        info,
-        metadata,
-        contentDispositionFilename,
-        contentLength,
-      } = await pdfDoc.getMetadata();
+      const { info, metadata, contentDispositionFilename, contentLength } =
+        await pdfDoc.getMetadata();
 
       // The following are PDF.js specific, non-standard, properties.
       expect(info.PDFFormatVersion).toEqual(null);
@@ -1197,13 +1218,13 @@ describe("api", function () {
         loadingTask1.promise,
         loadingTask2.promise,
       ]);
-      const fingerprint1 = data[0].fingerprint;
-      const fingerprint2 = data[1].fingerprint;
+      const fingerprints1 = data[0].fingerprints;
+      const fingerprints2 = data[1].fingerprints;
 
-      expect(fingerprint1).not.toEqual(fingerprint2);
+      expect(fingerprints1).not.toEqual(fingerprints2);
 
-      expect(fingerprint1).toEqual("2f695a83d6e7553c24fc08b7ac69712d");
-      expect(fingerprint2).toEqual("04c7126b34a46b6d4d6e7a1eff7edcb6");
+      expect(fingerprints1).toEqual(["2f695a83d6e7553c24fc08b7ac69712d", null]);
+      expect(fingerprints2).toEqual(["04c7126b34a46b6d4d6e7a1eff7edcb6", null]);
 
       await Promise.all([loadingTask1.destroy(), loadingTask2.destroy()]);
     });
@@ -1445,13 +1466,12 @@ describe("api", function () {
           docBaseUrl: "qwerty.pdf",
         })
       );
-      const invalidDocBaseUrlPromise = invalidDocBaseUrlLoadingTask.promise.then(
-        function (pdfDoc) {
+      const invalidDocBaseUrlPromise =
+        invalidDocBaseUrlLoadingTask.promise.then(function (pdfDoc) {
           return pdfDoc.getPage(1).then(function (pdfPage) {
             return pdfPage.getAnnotations();
           });
-        }
-      );
+        });
 
       const [
         defaultAnnotations,
@@ -1495,12 +1515,14 @@ describe("api", function () {
       });
 
       const data = await Promise.all([defaultPromise, parametersPromise]);
+
       expect(!!data[0].items).toEqual(true);
-      expect(data[0].items.length).toEqual(7);
+      expect(data[0].items.length).toEqual(12);
       expect(!!data[0].styles).toEqual(true);
 
-      // A simple check that ensures the two `textContent` object match.
-      expect(JSON.stringify(data[0])).toEqual(JSON.stringify(data[1]));
+      expect(!!data[1].items).toEqual(true);
+      expect(data[1].items.length).toEqual(7);
+      expect(!!data[1].styles).toEqual(true);
     });
 
     it("gets text content, with correct properties (issue 8276)", async function () {
@@ -1511,17 +1533,20 @@ describe("api", function () {
       const pdfPage = await pdfDoc.getPage(1);
       const { items, styles } = await pdfPage.getTextContent();
       expect(items.length).toEqual(1);
-      expect(Object.keys(styles)).toEqual(["Times"]);
+      // Font name will a random object id.
+      const fontName = items[0].fontName;
+      expect(Object.keys(styles)).toEqual([fontName]);
 
       expect(items[0]).toEqual({
         dir: "ltr",
-        fontName: "Times",
+        fontName,
         height: 18,
         str: "Issue 8276",
         transform: [18, 0, 0, 18, 441.81, 708.4499999999999],
         width: 77.49,
+        hasEOL: false,
       });
-      expect(styles.Times).toEqual({
+      expect(styles[fontName]).toEqual({
         fontFamily: "serif",
         ascent: NaN,
         descent: NaN,
@@ -1670,7 +1695,7 @@ describe("api", function () {
       const expectedStreamTypes = {};
       expectedStreamTypes[StreamType.FLATE] = true;
       const expectedFontTypes = {};
-      expectedFontTypes[FontType.TYPE1] = true;
+      expectedFontTypes[FontType.TYPE1STANDARD] = true;
       expectedFontTypes[FontType.CIDFONTTYPE2] = true;
 
       expect(stats).toEqual({
@@ -1801,7 +1826,8 @@ describe("api", function () {
     });
 
     it("multiple render() on the same canvas", async function () {
-      const optionalContentConfigPromise = pdfDocument.getOptionalContentConfig();
+      const optionalContentConfigPromise =
+        pdfDocument.getOptionalContentConfig();
 
       const viewport = page.getViewport({ scale: 1 });
       const canvasAndCtx = CanvasFactory.create(

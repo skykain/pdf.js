@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-import { FormatError, info, unreachable, warn } from "../shared/util.js";
+import { FormatError, unreachable, warn } from "../shared/util.js";
 import { isDict, RefSet } from "./primitives.js";
 
 /**
@@ -32,9 +32,9 @@ class NameOrNumberTree {
   }
 
   getAll() {
-    const dict = Object.create(null);
+    const map = new Map();
     if (!this.root) {
-      return dict;
+      return map;
     }
     const xref = this.xref;
     // Reading Name/Number tree.
@@ -59,13 +59,14 @@ class NameOrNumberTree {
         continue;
       }
       const entries = obj.get(this._type);
-      if (Array.isArray(entries)) {
-        for (let i = 0, ii = entries.length; i < ii; i += 2) {
-          dict[xref.fetchIfRef(entries[i])] = xref.fetchIfRef(entries[i + 1]);
-        }
+      if (!Array.isArray(entries)) {
+        continue;
+      }
+      for (let i = 0, ii = entries.length; i < ii; i += 2) {
+        map.set(xref.fetchIfRef(entries[i]), xref.fetchIfRef(entries[i + 1]));
       }
     }
-    return dict;
+    return map;
   }
 
   get(key) {
@@ -129,23 +130,6 @@ class NameOrNumberTree {
         } else if (key > currentKey) {
           l = m + 2;
         } else {
-          return xref.fetchIfRef(entries[m + 1]);
-        }
-      }
-
-      // Fallback to an exhaustive search, in an attempt to handle corrupt
-      // PDF files where keys are not correctly ordered (fixes issue 10272).
-      info(
-        `Falling back to an exhaustive search, for key "${key}", ` +
-          `in "${this._type}" tree.`
-      );
-      for (let m = 0, mm = entries.length; m < mm; m += 2) {
-        const currentKey = xref.fetchIfRef(entries[m]);
-        if (currentKey === key) {
-          warn(
-            `The "${key}" key was found at an incorrect, ` +
-              `i.e. out-of-order, position in "${this._type}" tree.`
-          );
           return xref.fetchIfRef(entries[m + 1]);
         }
       }

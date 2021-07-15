@@ -15,7 +15,6 @@
 
 import {
   assert,
-  bytesToString,
   FormatError,
   info,
   InvalidPDFException,
@@ -53,27 +52,23 @@ import {
   XRefEntryException,
   XRefParseException,
 } from "./core_utils.js";
-import { NullStream, Stream, StreamsSequenceStream } from "./stream.js";
+import { NullStream, Stream } from "./stream.js";
 import { AnnotationFactory } from "./annotation.js";
+import { BaseStream } from "./base_stream.js";
 import { calculateMD5 } from "./crypto.js";
 import { Catalog } from "./catalog.js";
+import { getXfaFontWidths } from "./xfa_fonts.js";
 import { Linearization } from "./parser.js";
 import { ObjectLoader } from "./object_loader.js";
 import { OperatorList } from "./operator_list.js";
 import { PartialEvaluator } from "./evaluator.js";
+import { StreamsSequenceStream } from "./decode_stream.js";
 import { StructTreePage } from "./struct_tree.js";
 import { XFAFactory } from "./xfa/factory.js";
 import { XRef } from "./xref.js";
 
 const DEFAULT_USER_UNIT = 1.0;
 const LETTER_SIZE_MEDIABOX = [0, 0, 612, 792];
-
-function isAnnotationRenderable(annotation, intent) {
-  return (
-    (intent === "display" && annotation.viewable) ||
-    (intent === "print" && annotation.printable)
-  );
-}
 
 class Page {
   constructor({
@@ -85,6 +80,7 @@ class Page {
     globalIdFactory,
     fontCache,
     builtInCMapCache,
+    standardFontDataCache,
     globalImageCache,
     nonBlendModesSet,
     xfaFactory,
@@ -96,6 +92,7 @@ class Page {
     this.ref = ref;
     this.fontCache = fontCache;
     this.builtInCMapCache = builtInCMapCache;
+    this.standardFontDataCache = standardFontDataCache;
     this.globalImageCache = globalImageCache;
     this.nonBlendModesSet = nonBlendModesSet;
     this.evaluatorOptions = pdfManager.evaluatorOptions;
@@ -136,7 +133,7 @@ class Page {
   }
 
   get content() {
-    return this.pageDict.get("Contents");
+    return this.pageDict.getArray("Contents");
   }
 
   get resources() {
@@ -152,8 +149,7 @@ class Page {
 
   _getBoundingBox(name) {
     if (this.xfaData) {
-      const { width, height } = this.xfaData.attributes.style;
-      return [0, 0, parseInt(width), parseInt(height)];
+      return this.xfaData.bbox;
     }
 
     const box = this._getInheritableProperty(name, /* getArray = */ true);
@@ -220,7 +216,7 @@ class Page {
     if (rotate % 90 !== 0) {
       rotate = 0;
     } else if (rotate >= 360) {
-      rotate = rotate % 360;
+      rotate %= 360;
     } else if (rotate < 0) {
       // The spec doesn't cover negatives. Assume it's counterclockwise
       // rotation. The following is the other implementation of modulo.
@@ -229,30 +225,27 @@ class Page {
     return shadow(this, "rotate", rotate);
   }
 
+  /**
+   * @returns {Promise<BaseStream>}
+   */
   getContentStream() {
-    const content = this.content;
-    let stream;
-
-    if (Array.isArray(content)) {
-      // Fetching the individual streams from the array.
-      const xref = this.xref;
-      const streams = [];
-      for (const subStream of content) {
-        streams.push(xref.fetchIfRef(subStream));
+    return this.pdfManager.ensure(this, "content").then(content => {
+      if (content instanceof BaseStream) {
+        return content;
       }
-      stream = new StreamsSequenceStream(streams);
-    } else if (isStream(content)) {
-      stream = content;
-    } else {
+      if (Array.isArray(content)) {
+        return new StreamsSequenceStream(content);
+      }
       // Replace non-existent page content with empty content.
-      stream = new NullStream();
-    }
-    return stream;
+      return new NullStream();
+    });
   }
 
   get xfaData() {
     if (this.xfaFactory) {
-      return shadow(this, "xfaData", this.xfaFactory.getPage(this.pageIndex));
+      return shadow(this, "xfaData", {
+        bbox: this.xfaFactory.getBoundingBox(this.pageIndex),
+      });
     }
     return shadow(this, "xfaData", null);
   }
@@ -265,6 +258,7 @@ class Page {
       idFactory: this._localIdFactory,
       fontCache: this.fontCache,
       builtInCMapCache: this.builtInCMapCache,
+      standardFontDataCache: this.standardFontDataCache,
       globalImageCache: this.globalImageCache,
       options: this.evaluatorOptions,
     });
@@ -274,7 +268,7 @@ class Page {
     return this._parsedAnnotations.then(function (annotations) {
       const newRefsPromises = [];
       for (const annotation of annotations) {
-        if (!isAnnotationRenderable(annotation, "print")) {
+        if (!annotation.mustBePrinted(annotationStorage)) {
           continue;
         }
         newRefsPromises.push(
@@ -313,10 +307,7 @@ class Page {
     renderInteractiveForms,
     annotationStorage,
   }) {
-    const contentStreamPromise = this.pdfManager.ensure(
-      this,
-      "getContentStream"
-    );
+    const contentStreamPromise = this.getContentStream();
     const resourcesPromise = this.loadResources([
       "ColorSpace",
       "ExtGState",
@@ -334,6 +325,7 @@ class Page {
       idFactory: this._localIdFactory,
       fontCache: this.fontCache,
       builtInCMapCache: this.builtInCMapCache,
+      standardFontDataCache: this.standardFontDataCache,
       globalImageCache: this.globalImageCache,
       options: this.evaluatorOptions,
     });
@@ -377,8 +369,9 @@ class Page {
         const opListPromises = [];
         for (const annotation of annotations) {
           if (
-            isAnnotationRenderable(annotation, intent) &&
-            !annotation.isHidden(annotationStorage)
+            (intent === "display" &&
+              annotation.mustBeViewed(annotationStorage)) ||
+            (intent === "print" && annotation.mustBePrinted(annotationStorage))
           ) {
             opListPromises.push(
               annotation
@@ -420,10 +413,7 @@ class Page {
     sink,
     combineTextItems,
   }) {
-    const contentStreamPromise = this.pdfManager.ensure(
-      this,
-      "getContentStream"
-    );
+    const contentStreamPromise = this.getContentStream();
     const resourcesPromise = this.loadResources([
       "ExtGState",
       "Font",
@@ -440,6 +430,7 @@ class Page {
         idFactory: this._localIdFactory,
         fontCache: this.fontCache,
         builtInCMapCache: this.builtInCMapCache,
+        standardFontDataCache: this.standardFontDataCache,
         globalImageCache: this.globalImageCache,
         options: this.evaluatorOptions,
       });
@@ -482,7 +473,13 @@ class Page {
     return this._parsedAnnotations.then(function (annotations) {
       const annotationsData = [];
       for (let i = 0, ii = annotations.length; i < ii; i++) {
-        if (!intent || isAnnotationRenderable(annotations[i], intent)) {
+        // Get the annotation even if it's hidden because
+        // JS can change its display.
+        if (
+          !intent ||
+          (intent === "display" && annotations[i].viewable) ||
+          (intent === "print" && annotations[i].printable)
+        ) {
           annotationsData.push(annotations[i].data);
         }
       }
@@ -534,9 +531,9 @@ class Page {
 }
 
 const PDF_HEADER_SIGNATURE = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]);
-// prettier-ignore
 const STARTXREF_SIGNATURE = new Uint8Array([
-  0x73, 0x74, 0x61, 0x72, 0x74, 0x78, 0x72, 0x65, 0x66]);
+  0x73, 0x74, 0x61, 0x72, 0x74, 0x78, 0x72, 0x65, 0x66,
+]);
 const ENDOBJ_SIGNATURE = new Uint8Array([0x65, 0x6e, 0x64, 0x6f, 0x62, 0x6a]);
 
 const FINGERPRINT_FIRST_BYTES = 1024;
@@ -810,7 +807,7 @@ class PDFDocument {
     };
     if (isStream(xfa) && !xfa.isEmpty) {
       try {
-        entries["xdp:xdp"] = stringToUTF8String(bytesToString(xfa.getBytes()));
+        entries["xdp:xdp"] = stringToUTF8String(xfa.getString());
         return entries;
       } catch (_) {
         warn("XFA - Invalid utf-8 string.");
@@ -840,7 +837,7 @@ class PDFDocument {
         continue;
       }
       try {
-        entries[name] = stringToUTF8String(bytesToString(data.getBytes()));
+        entries[name] = stringToUTF8String(data.getString());
       } catch (_) {
         warn("XFA - Invalid utf-8 string.");
         return null;
@@ -862,7 +859,36 @@ class PDFDocument {
   }
 
   get isPureXfa() {
-    return this.xfaFactory !== null;
+    return this.xfaFactory && this.xfaFactory.isValid();
+  }
+
+  get htmlForXfa() {
+    if (this.xfaFactory) {
+      return this.xfaFactory.getPages();
+    }
+    return null;
+  }
+
+  async loadXfaImages() {
+    const xfaImagesDict = await this.pdfManager.ensureCatalog("xfaImages");
+    if (!xfaImagesDict) {
+      return;
+    }
+
+    const keys = xfaImagesDict.getKeys();
+    const objectLoader = new ObjectLoader(xfaImagesDict, keys, this.xref);
+    await objectLoader.load();
+
+    const xfaImages = new Map();
+    for (const key of keys) {
+      const stream = xfaImagesDict.get(key);
+      if (!isStream(stream)) {
+        continue;
+      }
+      xfaImages.set(key, stream.getBytes());
+    }
+
+    this.xfaFactory.setImages(xfaImages);
   }
 
   async loadXfaFonts(handler, task) {
@@ -882,6 +908,12 @@ class PDFDocument {
       return;
     }
 
+    const options = Object.assign(
+      Object.create(null),
+      this.pdfManager.evaluatorOptions
+    );
+    options.useSystemFonts = false;
+
     const partialEvaluator = new PartialEvaluator({
       xref: this.xref,
       handler,
@@ -889,10 +921,18 @@ class PDFDocument {
       idFactory: this._globalIdFactory,
       fontCache: this.catalog.fontCache,
       builtInCMapCache: this.catalog.builtInCMapCache,
+      standardFontDataCache: this.catalog.standardFontDataCache,
+      options,
     });
     const operatorList = new OperatorList();
+    const pdfFonts = [];
     const initialState = {
-      font: null,
+      get font() {
+        return pdfFonts[pdfFonts.length - 1];
+      },
+      set font(font) {
+        pdfFonts.push(font);
+      },
       clone() {
         return this;
       },
@@ -909,9 +949,15 @@ class PDFDocument {
       if (!(descriptor instanceof Dict)) {
         continue;
       }
-      const fontFamily = descriptor.get("FontFamily");
+      let fontFamily = descriptor.get("FontFamily");
+      // For example, "Wingdings 3" is not a valid font name in the css specs.
+      fontFamily = fontFamily.replace(/[ ]+([0-9])/g, "$1");
       const fontWeight = descriptor.get("FontWeight");
-      const italicAngle = descriptor.get("ItalicAngle");
+
+      // Angle is expressed in degrees counterclockwise in PDF
+      // when it's clockwise in CSS
+      // (see https://drafts.csswg.org/css-fonts-4/#valdef-font-style-oblique-angle)
+      const italicAngle = -descriptor.get("ItalicAngle");
       const cssFontInfo = { fontFamily, fontWeight, italicAngle };
 
       if (!validateCSSFont(cssFontInfo)) {
@@ -935,7 +981,84 @@ class PDFDocument {
           })
       );
     }
+
     await Promise.all(promises);
+    const missingFonts = this.xfaFactory.setFonts(pdfFonts);
+
+    if (!missingFonts) {
+      return;
+    }
+
+    options.ignoreErrors = true;
+    promises.length = 0;
+    pdfFonts.length = 0;
+
+    const reallyMissingFonts = new Set();
+    for (const missing of missingFonts) {
+      if (!getXfaFontWidths(`${missing}-Regular`)) {
+        // No substitution available: we'll fallback on Myriad.
+        reallyMissingFonts.add(missing);
+      }
+    }
+
+    if (reallyMissingFonts.size) {
+      missingFonts.push("PdfJS-Fallback");
+    }
+
+    for (const missing of missingFonts) {
+      if (reallyMissingFonts.has(missing)) {
+        continue;
+      }
+      for (const fontInfo of [
+        { name: "Regular", fontWeight: 400, italicAngle: 0 },
+        { name: "Bold", fontWeight: 700, italicAngle: 0 },
+        { name: "Italic", fontWeight: 400, italicAngle: 12 },
+        { name: "BoldItalic", fontWeight: 700, italicAngle: 12 },
+      ]) {
+        const name = `${missing}-${fontInfo.name}`;
+        const widths = getXfaFontWidths(name);
+        const dict = new Dict(null);
+        dict.set("BaseFont", Name.get(name));
+        dict.set("Type", Name.get("Font"));
+        dict.set("Subtype", Name.get("TrueType"));
+        dict.set("Encoding", Name.get("WinAnsiEncoding"));
+        const descriptor = new Dict(null);
+        descriptor.set("Widths", widths);
+        dict.set("FontDescriptor", descriptor);
+
+        promises.push(
+          partialEvaluator
+            .handleSetFont(
+              resources,
+              [Name.get(name), 1],
+              /* fontRef = */ null,
+              operatorList,
+              task,
+              initialState,
+              /* fallbackFontDict = */ dict,
+              /* cssFontInfo = */ {
+                fontFamily: missing,
+                fontWeight: fontInfo.fontWeight,
+                italicAngle: fontInfo.italicAngle,
+              }
+            )
+            .catch(function (reason) {
+              warn(`loadXfaFonts: "${reason}".`);
+              return null;
+            })
+        );
+      }
+    }
+
+    await Promise.all(promises);
+    this.xfaFactory.appendFonts(pdfFonts, reallyMissingFonts);
+  }
+
+  async serializeXfaData(annotationStorage) {
+    if (this.xfaFactory) {
+      return this.xfaFactory.serializeData(annotationStorage);
+    }
+    return null;
   }
 
   get formInfo() {
@@ -1063,30 +1186,44 @@ class PDFDocument {
     return shadow(this, "documentInfo", docInfo);
   }
 
-  get fingerprint() {
-    let hash;
+  get fingerprints() {
+    function validate(data) {
+      return (
+        typeof data === "string" &&
+        data.length > 0 &&
+        data !== EMPTY_FINGERPRINT
+      );
+    }
+
+    function hexString(hash) {
+      const buf = [];
+      for (let i = 0, ii = hash.length; i < ii; i++) {
+        const hex = hash[i].toString(16);
+        buf.push(hex.padStart(2, "0"));
+      }
+      return buf.join("");
+    }
+
     const idArray = this.xref.trailer.get("ID");
-    if (
-      Array.isArray(idArray) &&
-      idArray[0] &&
-      isString(idArray[0]) &&
-      idArray[0] !== EMPTY_FINGERPRINT
-    ) {
-      hash = stringToBytes(idArray[0]);
+    let hashOriginal, hashModified;
+    if (Array.isArray(idArray) && validate(idArray[0])) {
+      hashOriginal = stringToBytes(idArray[0]);
+
+      if (idArray[1] !== idArray[0] && validate(idArray[1])) {
+        hashModified = stringToBytes(idArray[1]);
+      }
     } else {
-      hash = calculateMD5(
+      hashOriginal = calculateMD5(
         this.stream.getByteRange(0, FINGERPRINT_FIRST_BYTES),
         0,
         FINGERPRINT_FIRST_BYTES
       );
     }
 
-    const fingerprintBuf = [];
-    for (let i = 0, ii = hash.length; i < ii; i++) {
-      const hex = hash[i].toString(16);
-      fingerprintBuf.push(hex.padStart(2, "0"));
-    }
-    return shadow(this, "fingerprint", fingerprintBuf.join(""));
+    return shadow(this, "fingerprints", [
+      hexString(hashOriginal),
+      hashModified ? hexString(hashModified) : null,
+    ]);
   }
 
   _getLinearizationPage(pageIndex) {
@@ -1143,6 +1280,7 @@ class PDFDocument {
           globalIdFactory: this._globalIdFactory,
           fontCache: catalog.fontCache,
           builtInCMapCache: catalog.builtInCMapCache,
+          standardFontDataCache: catalog.standardFontDataCache,
           globalImageCache: catalog.globalImageCache,
           nonBlendModesSet: catalog.nonBlendModesSet,
           xfaFactory: this.xfaFactory,
@@ -1165,6 +1303,7 @@ class PDFDocument {
         globalIdFactory: this._globalIdFactory,
         fontCache: catalog.fontCache,
         builtInCMapCache: catalog.builtInCMapCache,
+        standardFontDataCache: catalog.standardFontDataCache,
         globalImageCache: catalog.globalImageCache,
         nonBlendModesSet: catalog.nonBlendModesSet,
         xfaFactory: null,
